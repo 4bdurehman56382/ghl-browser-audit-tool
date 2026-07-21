@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grill Me Code"
+  short_description: "A relentless code grilling session."
+  default_prompt: "Use $grill-me-code to run a /grilling session for this code, diff, or implementation plan."
