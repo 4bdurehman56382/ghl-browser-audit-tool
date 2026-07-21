@@ -7,36 +7,72 @@ The workspace is split into two top-level folders:
 - `audit-tool/`: reusable GoHighLevel browser audit scripts, Node package files, and dependencies.
 - `client-materials/`: client/run-specific reports, screenshots, markdown files, PDFs, docs, images, links, and other reference material.
 
-The workspace is not currently a git repository.
-
-## What Was Done
-
-- Created a clean two-folder structure:
-  - `audit-tool`
-  - `client-materials`
-- Moved all browser automation scripts into `audit-tool/`.
-- Moved `package.json`, `package-lock.json`, and `node_modules` into `audit-tool/`.
-- Moved generated audit output, screenshots, dashboard captures, opportunity images, case study files, and other client materials into `client-materials/`.
-- Moved `browser-audit-tools/Things-u-couldnt-load` into `client-materials/Things-u-couldnt-load`.
-- Removed the old empty `browser-audit-tools` folder.
-- Renamed the npm package from the old workspace name to `audit-tool`.
-- Added `audit-tool/audit-paths.js` so scripts share output path logic and required environment checks.
-- Removed the hard-coded GoHighLevel location ID from the reusable scripts.
-- Removed hard-coded run-specific funnel IDs from the reusable scripts.
-- Updated generated outputs to default to `client-materials/audit-output` instead of writing into `audit-tool`.
-- Verified all JavaScript files in `audit-tool/` with `node --check`.
+The workspace IS a git repository (initialized with the v2.0.0 tool).
 
 ## What The Audit Tool Does
 
-The audit tool is a set of Node.js scripts using `playwright-core` to connect to an already-open Chromium/Chrome browser through the Chrome DevTools Protocol endpoint:
+The audit tool is a set of Node.js scripts using `playwright-core` to connect to a Chromium/Chrome browser through the Chrome DevTools Protocol endpoint:
 
 ```bash
 http://127.0.0.1:9222
 ```
 
-The tool assumes the browser is already logged into GoHighLevel and has access to the target location. It does not perform login itself.
+The tool now automatically launches Chrome with remote debugging enabled (with a user warning beforehand). It does not perform login itself — the user must log into GoHighLevel manually once the browser opens.
 
-The scripts are read-only browser automation. They navigate or inspect pages, extract visible page data, take screenshots, and write JSON/Markdown summaries.
+The scripts are **read-only** browser automation. They navigate or inspect pages, extract visible page data, take screenshots, and write JSON/Markdown/PDF summaries. The tool does NOT submit forms, delete data, disconnect integrations, purchase products, export/import data, or change any settings.
+
+## Key Features (v2.0.0)
+
+### Auto Chrome Launch with Warning
+The tool automatically finds and launches Chrome/Chromium with `--remote-debugging-port=9222`. Before starting, it displays a detailed warning explaining exactly what the tool will do and requires the user to type "yes" to proceed.
+
+### Visual Cursor Simulation
+A red circle cursor with a pulsing ring is injected into every page. The cursor moves slowly across the screen as the bot navigates, giving clear visual feedback about what the tool is doing. A horizontal scan line follows the cursor movement.
+
+### Slow Navigation (45-Minute Page Load Timer)
+Instead of quick 10-30 second waits, the enhanced tool waits up to **45 minutes** (or until fully loaded) per page. It polls the page content every few seconds, logging progress to the terminal. This ensures slow-loading or heavily dynamic pages are captured once they fully render.
+
+### Admin Shutoff Detection
+The tool automatically detects when a page or feature has been disabled/shut off by the administrator. It checks for signals including:
+- Access denied / unauthorized pages
+- Subscription expired / upgrade required
+- Billing issues / payment required
+- Account suspended / disabled / locked
+- Feature disabled / unavailable
+- Page not found (404)
+- Redirect to login
+- Empty page bodies
+- Maintenance mode pages
+
+When a shutoff is detected, the page is **skipped silently** — no error is thrown, just logged as "shut off by admin" in the report.
+
+### Workflow Navigation & Capture
+The tool navigates to the Automation → Workflows section and:
+- Finds all visible workflow links
+- Clicks into each workflow one by one
+- Captures the workflow builder/overview with full-page screenshots
+- Identifies individual workflow steps (triggers, actions, conditions)
+- Moves the cursor to each step and takes dedicated step screenshots
+- Records step text for the audit report
+
+### Automatic PDF Report Generation
+After the audit completes, the tool generates a professional PDF report containing:
+- Cover page with audit metadata
+- Executive summary with OK/shutoff/failed counts
+- Detailed page-by-page audit table (status, headings, buttons, screenshots, issues, load time, body sample)
+- Workflow audit table with step details
+- Admin shutoff pages section with reasons
+- Console and network issues section
+- Color-coded status indicators (green=OK, orange=shut off, red=failed)
+
+### Strictly Read-Only
+The tool is designed for evidence gathering, not mutation. It does NOT:
+- Submit forms or click "save"/"submit" buttons
+- Delete, remove, or disconnect anything
+- Purchase, export, or import data
+- Change any settings
+- Impersonate users or perform OAuth flows
+- Navigate to risky URLs (logout, delete, remove, disconnect, etc.)
 
 ## Required Environment
 
@@ -58,210 +94,109 @@ If `AUDIT_OUTPUT_DIR` is not set, output defaults to:
 client-materials/audit-output
 ```
 
-`funnel-tabs-readonly.js` also requires:
+Optional limits:
 
 ```bash
-GHL_FUNNELS_JSON=/path/to/funnels.json
+MAX_PAGES=200  # max pages to crawl (default: 200)
 ```
 
-That JSON file should contain:
+## Main Entry Point: `audit.js`
 
-```json
-[
-  {
-    "name": "Funnel Name",
-    "funnelId": "funnel_id",
-    "stepId": "step_id"
-  }
-]
-```
-
-`retry-missed-pages-30s.js` can optionally load additional run-specific retry routes:
+The enhanced orchestrator that runs the full audit pipeline in 4 phases:
 
 ```bash
-GHL_RETRY_ROUTES_JSON=/path/to/routes.json
+GHL_LOCATION_ID=your_location_id node audit.js
 ```
 
-That JSON file should contain route objects like:
+### Phase 1: Deep Page Audit
+- Builds a seed list of 65+ GoHighLevel routes across all sections
+- Navigates to each page with a 45-minute max load timer
+- Injects visual cursor and slowly scrolls/animates across the page
+- Extracts page data: headings, buttons, fields, links, images, stats
+- Takes full-page screenshots
+- Detects admin-shutoff pages and skips them
+- Discovers internal links and enqueues more pages (up to MAX_PAGES)
 
-```json
-[
-  {
-    "name": "example-route",
-    "path": "/funnels-websites/funnels/example/steps/example/publishing",
-    "expect": ["Publishing"],
-    "minBody": 500
-  }
-]
-```
+### Phase 2: Workflow Audit
+- Navigates to Automation → Workflows
+- Finds all workflow links
+- Visits each workflow, captures overview screenshot
+- Identifies workflow steps and captures step-by-step screenshots
+- Records step text for the report
 
-## Scripts
+### Phase 3: Open Tab Capture
+- Captures all currently open GoHighLevel browser tabs
+- Takes screenshots and extracts page content from each tab
 
-### `audit-tool/capture-ghl-readonly.js`
+### Phase 4: PDF Report Generation
+- Builds a comprehensive HTML report
+- Converts it to a formatted A4 PDF with print backgrounds
+- Saves both HTML and PDF versions
 
-Captures all currently open GoHighLevel browser tabs.
+## Library Modules (`audit-tool/lib/`)
 
-For each matching tab, it:
+### `chrome.js`
+- Finds Chrome/Chromium on the system (Linux, macOS, Windows)
+- Checks if CDP is already alive on port 9222
+- Launches Chrome with `--remote-debugging-port=9222` and a dedicated user data directory
+- Displays detailed pre-audit warning and asks for confirmation
+- Returns control once CDP is confirmed alive
 
-- Captures desktop and mobile screenshots.
-- Extracts visible headings.
-- Extracts visible buttons/actions.
-- Extracts forms and visible fields.
-- Extracts links and images.
-- Checks horizontal overflow on desktop and mobile.
-- Samples console warnings/errors.
-- Writes `ghl-browser-capture.json`.
-- Writes `ghl-browser-capture-summary.md`.
-- Writes screenshots to `screenshots/`.
+### `cursor.js`
+- Injects visual cursor (red circle with pulsing ring) into pages
+- Moves cursor slowly with configurable step count
+- Animates cursor across the page in a sine-wave pattern
+- Moves cursor to specific DOM element positions
+- Scrolls the page while tracing with the cursor
+- Shows a horizontal scan line effect
 
-This script does not require `GHL_LOCATION_ID` because it works from already-open tabs.
+### `detector.js`
+- Extracts readable content from pages
+- Detects admin shutoff via pattern matching on body text and title
+- Covers: access denied, subscription expired, billing issues, account suspended, feature disabled, page not found, login redirect, empty body, maintenance mode
+- Returns structured result with shutoff status, reason, and type
 
-### `audit-tool/section-walk-ghl-readonly.js`
+### `scanner.js`
+- Core page scanning engine
+- Extracts comprehensive page data (headings, buttons, fields, links, images, stats)
+- Implements 45-minute polling wait for page readiness
+- Takes full-page screenshots with cursor visible
+- Handles per-page console/error tracking
+- Controls viewport size for consistent captures
 
-Walks through major sidebar sections from the currently open GoHighLevel location page.
+### `workflows.js`
+- Navigates to Automation → Workflows section
+- Finds workflow links using multiple CSS selectors
+- Walks through each workflow capturing overview and step screenshots
+- Moves cursor to each workflow step for visual feedback
+- Handles shutoff detection on workflow pages
 
-Sections covered:
+### `report-pdf.js`
+- Builds professional HTML report with CSS styling
+- Generates A4 PDF with print backgrounds
+- Includes cover page, executive summary, detailed tables
+- Color-coded status indicators
+- Falls back to HTML-only if PDF generation fails
 
-- Dashboard
-- Opportunities
-- Sites
-- Marketing
-- Automation
-- Reputation
-- Reporting
+## Original Scripts (Preserved)
 
-For each section, it:
+### `capture-ghl-readonly.js`
+Captures all currently open GoHighLevel browser tabs with desktop/mobile screenshots.
 
-- Clicks the section by visible text.
-- Waits briefly for the page to load.
-- Captures a screenshot.
-- Extracts URL, title, headings, visible actions, and a body sample.
-- Writes `section-walk.json`.
-- Writes `section-walk-summary.md`.
+### `section-walk-ghl-readonly.js`
+Walks through major sidebar sections (Dashboard, Opportunities, Sites, Marketing, Automation, Reputation, Reporting) clicking each and capturing screenshots.
 
-This script finds an existing open page whose URL contains `app.gohighlevel.com/v2/location/`.
+### `deep-ghl-readonly-crawl.js`
+Deep location crawl from predefined seed routes. Covers dashboard, conversations, calendars, contacts, opportunities, payments, AI agents, marketing, automation, sites, memberships, reputation, reporting, integrations, settings.
 
-### `audit-tool/deep-ghl-readonly-crawl.js`
+### `targeted-ghl-tabs-readonly.js`
+Audits fixed target routes needing extra attention (AI agents, calendar settings, automation workflows/folders, marketing trigger links, sites blogs/analytics/QR/client-portal).
 
-Performs a deeper location crawl from a predefined list of GoHighLevel seed routes.
+### `retry-missed-pages-30s.js`
+Retries pages that may load slowly (up to 30s). Checks for meaningful body content. Supports extra retry routes via `GHL_RETRY_ROUTES_JSON`.
 
-It requires:
-
-```bash
-GHL_LOCATION_ID=your_location_id
-```
-
-It covers broad areas including dashboard, conversations, calendars, contacts, opportunities, payments, AI agents, marketing, automation, sites, memberships, media storage, reputation, reporting, integrations, and settings.
-
-For each page, it:
-
-- Navigates to the route.
-- Waits for page content.
-- Extracts visible headings, buttons, fields, links, table-like content, body text, and page metrics.
-- Captures a full-page screenshot.
-- Tracks network responses with GoHighLevel URLs returning `400+`.
-- Tracks console warnings/errors and page errors.
-- Discovers internal links and can enqueue more pages.
-- Avoids unsafe/destructive URLs containing words like logout, delete, remove, disconnect, purchase, oauth, export, or import.
-- Writes deep crawl JSON and Markdown summary output.
-
-The crawl limit defaults to:
-
-```bash
-MAX_PAGES=120
-```
-
-This can be overridden with:
-
-```bash
-MAX_PAGES=200
-```
-
-### `audit-tool/targeted-ghl-tabs-readonly.js`
-
-Audits a fixed set of targeted GoHighLevel routes that often need extra attention.
-
-It requires:
-
-```bash
-GHL_LOCATION_ID=your_location_id
-```
-
-Targeted areas include:
-
-- AI agent pages
-- Ask AI
-- Calendar settings and appointments
-- Settings calendar tabs
-- Automation workflows and folders
-- Marketing trigger links
-- Sites blogs, analytics, QR codes, and client portal
-
-For each route, it:
-
-- Navigates directly to the route.
-- Waits 15 seconds.
-- Extracts title, headings, actions, and body text.
-- Captures a screenshot.
-- Writes `targeted-tabs.json`.
-- Writes `targeted-tabs-summary.md`.
-
-### `audit-tool/retry-missed-pages-30s.js`
-
-Retries pages that may load slowly or fail during the main crawl.
-
-It requires:
-
-```bash
-GHL_LOCATION_ID=your_location_id
-```
-
-It waits up to 30 seconds for each route to become meaningful. Meaningful means:
-
-- Body text length reaches the route minimum.
-- Expected words appear in the body text, when configured.
-
-For each route, it:
-
-- Navigates directly to the route.
-- Repeatedly samples page content until meaningful or timed out.
-- Captures a screenshot whether the page loads or errors.
-- Extracts body text, headings, actions, fields, and page stats.
-- Writes `missed-retry-30s.json`.
-- Writes `missed-retry-30s-summary.md`.
-
-Extra run-specific retry routes can be supplied with `GHL_RETRY_ROUTES_JSON`.
-
-### `audit-tool/funnel-tabs-readonly.js`
-
-Audits configured funnel tabs.
-
-It requires:
-
-```bash
-GHL_LOCATION_ID=your_location_id
-GHL_FUNNELS_JSON=/path/to/funnels.json
-```
-
-For each configured funnel, it visits:
-
-- Overview
-- Products
-- Publishing
-- Stats
-- Sales
-- Security
-- Events
-- Settings
-
-For each tab, it:
-
-- Navigates directly to the tab URL.
-- Waits 10 seconds.
-- Captures body text.
-- Captures a full-page screenshot.
-- Writes `funnel-tabs.json`.
-- Writes `funnel-tabs-summary.md`.
+### `funnel-tabs-readonly.js`
+Audits configured funnel tabs (Overview, Products, Publishing, Stats, Sales, Security, Events, Settings). Requires `GHL_FUNNELS_JSON`.
 
 ## Output Structure
 
@@ -271,26 +206,20 @@ Default output root:
 client-materials/audit-output
 ```
 
-Common generated files:
+Generated files from `audit.js`:
 
-- `ghl-browser-capture.json`
-- `ghl-browser-capture-summary.md`
-- `screenshots/*.png`
-- `section-walk/section-walk.json`
-- `section-walk/section-walk-summary.md`
-- `section-walk/*.png`
-- `deep-ghl-audit/deep-crawl.json`
-- `deep-ghl-audit/deep-crawl-summary.md`
-- `deep-ghl-audit/screenshots/*.png`
-- `deep-ghl-audit/targeted/targeted-tabs.json`
-- `deep-ghl-audit/targeted/targeted-tabs-summary.md`
-- `deep-ghl-audit/targeted/*.png`
-- `deep-ghl-audit/missed-retry-30s/missed-retry-30s.json`
-- `deep-ghl-audit/missed-retry-30s/missed-retry-30s-summary.md`
-- `deep-ghl-audit/missed-retry-30s/screenshots/*.png`
-- `deep-ghl-audit/funnel-tabs/funnel-tabs.json`
-- `deep-ghl-audit/funnel-tabs/funnel-tabs-summary.md`
-- `deep-ghl-audit/funnel-tabs/*.png`
+- `audit-results.json` — Full structured audit data (pages, workflows, summary)
+- `audit-summary.md` — Markdown summary report
+- `audit-report.html` — HTML report (also used to generate PDF)
+- `ghl-audit-report-{timestamp}.pdf` — Final PDF audit report
+- `screenshots/*.png` — All page screenshots
+- `workflow-screenshots/*.png` — Workflow step screenshots
+
+Original scripts write to their respective subdirectories:
+
+- `ghl-browser-capture.json` / `ghl-browser-capture-summary.md`
+- `section-walk/`
+- `deep-ghl-audit/` (deep crawl, targeted, missed-retry, funnel-tabs)
 
 ## Typical Run Flow
 
@@ -300,9 +229,21 @@ From the workspace root:
 cd audit-tool
 ```
 
-Start or connect Chrome/Chromium with remote debugging enabled on port `9222`, then log into GoHighLevel manually.
+### Enhanced Full Audit (recommended):
 
-Run broad captures:
+```bash
+GHL_LOCATION_ID=your_location_id node audit.js
+```
+
+The tool will:
+1. Display the warning
+2. Ask for confirmation
+3. Launch Chrome with remote debugging
+4. Wait for you to log into GoHighLevel
+5. Execute all 4 phases automatically
+6. Generate the PDF report
+
+### Individual Scripts:
 
 ```bash
 node capture-ghl-readonly.js
@@ -310,11 +251,6 @@ node section-walk-ghl-readonly.js
 GHL_LOCATION_ID=your_location_id node deep-ghl-readonly-crawl.js
 GHL_LOCATION_ID=your_location_id node targeted-ghl-tabs-readonly.js
 GHL_LOCATION_ID=your_location_id node retry-missed-pages-30s.js
-```
-
-Run funnel tab capture:
-
-```bash
 GHL_LOCATION_ID=your_location_id GHL_FUNNELS_JSON=/path/to/funnels.json node funnel-tabs-readonly.js
 ```
 
@@ -325,15 +261,27 @@ GHL_LOCATION_ID=your_location_id GHL_FUNNELS_JSON=/path/to/funnels.json node fun
 - Do not hard-code client names, location IDs, funnel IDs, or step IDs into `audit-tool/`.
 - Use environment variables or JSON config files for run-specific data.
 - The scripts are designed for evidence gathering, not mutation.
-- Avoid adding any click behavior that submits forms, deletes data, disconnects integrations, purchases products, exports/imports data, or changes settings.
-- The deep crawler has a deny list for risky URLs, but any new navigation logic should still be reviewed carefully.
+- The deep crawler has a deny list for risky URLs, and the main audit tool extends this with additional safety checks.
+- The tool uses a dedicated Chrome user data directory (`~/.audit-tool-chrome-profile`) to avoid interfering with your regular Chrome profile.
 
-## Validation Performed
+## Validation
 
-All current JavaScript files in `audit-tool/` passed:
+All JavaScript files in `audit-tool/` pass:
 
 ```bash
 node --check
 ```
 
-The reusable tool folder was scanned for known client-specific strings after cleanup, excluding dependencies and lockfiles.
+Or run the check script:
+
+```bash
+npm run check
+```
+
+## Git
+
+The workspace is a git repository. To view history:
+
+```bash
+git log --oneline
+```
