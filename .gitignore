@@ -1,0 +1,9 @@
+node_modules/
+*.log
+.DS_Store
+.audit-tool-chrome-profile/
+client-materials/audit-output/
+client-materials/Dashboard/
+client-materials/Opportunities/
+client-materials/Things-u-couldnt-load/
+client-materials/client-casestudies-files/

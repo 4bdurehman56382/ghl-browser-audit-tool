@@ -1,0 +1,23 @@
+{
+  "name": "audit-tool",
+  "version": "2.0.0",
+  "description": "Read-only GoHighLevel browser audit tool with slow cursor, workflow walking, admin-shutoff detection, and auto PDF reporting",
+  "main": "audit.js",
+  "scripts": {
+    "audit": "node audit.js",
+    "capture": "node capture-ghl-readonly.js",
+    "section-walk": "node section-walk-ghl-readonly.js",
+    "deep-crawl": "node deep-ghl-readonly-crawl.js",
+    "targeted": "node targeted-ghl-tabs-readonly.js",
+    "retry-missed": "node retry-missed-pages-30s.js",
+    "funnel-tabs": "node funnel-tabs-readonly.js",
+    "check": "node --check audit.js && node --check lib/chrome.js && node --check lib/cursor.js && node --check lib/detector.js && node --check lib/scanner.js && node --check lib/workflows.js && node --check lib/report-pdf.js",
+    "test": "npm run check"
+  },
+  "keywords": ["audit", "gohighlevel", "browser-automation", "read-only", "playwright"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "playwright-core": "^1.61.1"
+  }
+}
