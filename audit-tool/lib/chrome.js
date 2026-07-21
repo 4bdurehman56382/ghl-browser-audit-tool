@@ -72,7 +72,7 @@ function printWarning() {
     "  2. Navigate through GoHighLevel pages systematically.",
     "  3. Take screenshots of every page and workflow.",
     "  4. Move a visual cursor across the screen (read-only).",
-    "  5. Wait up to \x1b[1;33m45 minutes\x1b[0m per page for full loading.",
+    "  5. Wait up to \x1b[1;33m45 seconds\x1b[0m per page for full loading.",
     "  6. Generate a comprehensive PDF audit report.",
     "",
     "\x1b[1;37m  Important:\x1b[0m",

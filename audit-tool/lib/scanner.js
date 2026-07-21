@@ -3,7 +3,7 @@ const fs = require("fs");
 const { injectCursor, moveCursor, animateCursorAcross, moveToElement, hideCursor } = require("./cursor");
 const { detectShutoff, extractReadableContent } = require("./detector");
 
-const PAGE_LOAD_TIMEOUT_MS = 45 * 60 * 1000;
+const PAGE_LOAD_TIMEOUT_MS = 45 * 1000;
 const NAVIGATION_TIMEOUT_MS = 60000;
 
 function safeName(url) {

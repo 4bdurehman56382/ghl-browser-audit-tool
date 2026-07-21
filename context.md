@@ -30,7 +30,7 @@ The tool automatically finds and launches Chrome/Chromium with `--remote-debuggi
 A red circle cursor with a pulsing ring is injected into every page. The cursor moves slowly across the screen as the bot navigates, giving clear visual feedback about what the tool is doing. A horizontal scan line follows the cursor movement.
 
 ### Slow Navigation (45-Minute Page Load Timer)
-Instead of quick 10-30 second waits, the enhanced tool waits up to **45 minutes** (or until fully loaded) per page. It polls the page content every few seconds, logging progress to the terminal. This ensures slow-loading or heavily dynamic pages are captured once they fully render.
+Instead of quick 10-30 second waits, the enhanced tool waits up to **45 seconds** (or until fully loaded) per page. It polls the page content every few seconds, logging progress to the terminal. This ensures slow-loading or heavily dynamic pages are captured once they fully render.
 
 ### Admin Shutoff Detection
 The tool automatically detects when a page or feature has been disabled/shut off by the administrator. It checks for signals including:
@@ -110,7 +110,7 @@ GHL_LOCATION_ID=your_location_id node audit.js
 
 ### Phase 1: Deep Page Audit
 - Builds a seed list of 65+ GoHighLevel routes across all sections
-- Navigates to each page with a 45-minute max load timer
+- Navigates to each page with a 45-second max load timer
 - Injects visual cursor and slowly scrolls/animates across the page
 - Extracts page data: headings, buttons, fields, links, images, stats
 - Takes full-page screenshots
@@ -159,7 +159,7 @@ GHL_LOCATION_ID=your_location_id node audit.js
 ### `scanner.js`
 - Core page scanning engine
 - Extracts comprehensive page data (headings, buttons, fields, links, images, stats)
-- Implements 45-minute polling wait for page readiness
+- Implements 45-second polling wait for page readiness
 - Takes full-page screenshots with cursor visible
 - Handles per-page console/error tracking
 - Controls viewport size for consistent captures

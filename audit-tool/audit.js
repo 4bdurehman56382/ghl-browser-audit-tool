@@ -211,7 +211,7 @@ async function main() {
 
   if (BASE) {
     console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m");
-    console.log("\x1b[1;36m  PHASE 1: Deep Page Audit (up to 45 min wait per page)\x1b[0m");
+    console.log("\x1b[1;36m  PHASE 1: Deep Page Audit (up to 45 sec wait per page)\x1b[0m");
     console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m\n");
 
     const seeds = buildSeedRoutes();
