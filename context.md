@@ -29,7 +29,7 @@ The tool automatically finds and launches Chrome/Chromium with `--remote-debuggi
 ### Visual Cursor Simulation
 A red circle cursor with a pulsing ring is injected into every page. The cursor moves slowly across the screen as the bot navigates, giving clear visual feedback about what the tool is doing. A horizontal scan line follows the cursor movement.
 
-### Slow Navigation (45-Minute Page Load Timer)
+### Slow Navigation (45-Second Page Load Timer)
 Instead of quick 10-30 second waits, the enhanced tool waits up to **45 seconds** (or until fully loaded) per page. It polls the page content every few seconds, logging progress to the terminal. This ensures slow-loading or heavily dynamic pages are captured once they fully render.
 
 ### Admin Shutoff Detection
@@ -41,10 +41,9 @@ The tool automatically detects when a page or feature has been disabled/shut off
 - Feature disabled / unavailable
 - Page not found (404)
 - Redirect to login
-- Empty page bodies
 - Maintenance mode pages
 
-When a shutoff is detected, the page is **skipped silently** — no error is thrown, just logged as "shut off by admin" in the report.
+When a strong shutoff signal is detected, the page is **skipped silently** — no error is thrown, just logged as "shut off by admin" in the report. Empty or slow-loading pages are no longer treated as admin shutoff by default; they are recorded as timeout/blank-page audit issues unless a stronger shutoff signal is present.
 
 ### Workflow Navigation & Capture
 The tool navigates to the Automation → Workflows section and:
@@ -100,6 +99,26 @@ Optional limits:
 MAX_PAGES=200  # max pages to crawl (default: 200)
 ```
 
+Optional browser/CDP controls:
+
+```bash
+CHROME_PATH=/path/to/chrome
+AUDIT_CDP_PORT=9222
+AUDIT_CDP_URL=http://127.0.0.1:9222
+AUDIT_ATTACH_EXISTING_CDP=1
+AUDIT_CHROME_NO_SANDBOX=1
+```
+
+`AUDIT_ATTACH_EXISTING_CDP=1` is required when the tool finds a browser already listening on the CDP endpoint. This avoids accidentally attaching to the wrong browser.
+
+Optional open-tab-only mode:
+
+```bash
+OPEN_TABS_ONLY=1
+```
+
+Without `GHL_LOCATION_ID`, the main audit refuses to run unless `OPEN_TABS_ONLY=1` is set. With `GHL_LOCATION_ID`, open-tab capture is scoped to that location by default. Set `AUDIT_ALLOW_ALL_GHL_TABS=1` only when you intentionally want to include other GoHighLevel tabs.
+
 ## Main Entry Point: `audit.js`
 
 The enhanced orchestrator that runs the full audit pipeline in 4 phases:
@@ -125,7 +144,8 @@ GHL_LOCATION_ID=your_location_id node audit.js
 - Records step text for the report
 
 ### Phase 3: Open Tab Capture
-- Captures all currently open GoHighLevel browser tabs
+- Captures currently open GoHighLevel browser tabs that pass the read-only safety filter
+- Scopes tabs to the configured `GHL_LOCATION_ID` by default
 - Takes screenshots and extracts page content from each tab
 
 ### Phase 4: PDF Report Generation
@@ -137,10 +157,31 @@ GHL_LOCATION_ID=your_location_id node audit.js
 
 ### `chrome.js`
 - Finds Chrome/Chromium on the system (Linux, macOS, Windows)
-- Checks if CDP is already alive on port 9222
+- Honors `CHROME_PATH` when provided
+- Supports `AUDIT_CDP_URL` / `AUDIT_CDP_PORT`
+- Checks if CDP is already alive on the configured endpoint
+- Requires `AUDIT_ATTACH_EXISTING_CDP=1` before attaching to an already-running CDP browser
 - Launches Chrome with `--remote-debugging-port=9222` and a dedicated user data directory
 - Displays detailed pre-audit warning and asks for confirmation
 - Returns control once CDP is confirmed alive
+
+### `config.js`
+- Validates `GHL_LOCATION_ID`
+- Parses positive integer environment values such as `MAX_PAGES`
+- Resolves output directories consistently
+- Loads and schema-checks funnel JSON config
+- Loads and schema-checks retry route JSON config
+
+### `safety.js`
+- Normalizes GoHighLevel URLs
+- Strips volatile UI parameters like `modal`, `drawer`, `showModal`, and `preview`
+- Enforces exact location scoping so similar IDs cannot bleed into another location
+- Rejects risky read/write/navigation URLs such as logout, delete, remove, disconnect, oauth, export, import, purchase, webhook, and related actions
+- Creates safe screenshot/report filenames
+
+### `browser-context.js`
+- Provides a checked default browser context helper
+- Produces a clear error if CDP is reachable but no browser context is available
 
 ### `cursor.js`
 - Injects visual cursor (red circle with pulsing ring) into pages
@@ -153,20 +194,24 @@ GHL_LOCATION_ID=your_location_id node audit.js
 ### `detector.js`
 - Extracts readable content from pages
 - Detects admin shutoff via pattern matching on body text and title
-- Covers: access denied, subscription expired, billing issues, account suspended, feature disabled, page not found, login redirect, empty body, maintenance mode
+- Covers: access denied, subscription expired, billing issues, account suspended, feature disabled, page not found, login redirect, maintenance mode
+- Can optionally classify empty bodies, but the main scanner disables that during slow-load detection to avoid false shutoff reports
 - Returns structured result with shutoff status, reason, and type
 
 ### `scanner.js`
 - Core page scanning engine
 - Extracts comprehensive page data (headings, buttons, fields, links, images, stats)
 - Implements 45-second polling wait for page readiness
+- Records slow/blank pages as timeout issues instead of silently treating them as admin shutoff
+- Cleans up console/pageerror listeners after each scan
 - Takes full-page screenshots with cursor visible
 - Handles per-page console/error tracking
 - Controls viewport size for consistent captures
 
 ### `workflows.js`
 - Navigates to Automation → Workflows section
-- Finds workflow links using multiple CSS selectors
+- Finds workflow links using valid DOM CSS selectors
+- Filters workflow links through the same read-only location safety checks
 - Walks through each workflow capturing overview and step screenshots
 - Moves cursor to each workflow step for visual feedback
 - Handles shutoff detection on workflow pages
@@ -176,15 +221,17 @@ GHL_LOCATION_ID=your_location_id node audit.js
 - Generates A4 PDF with print backgrounds
 - Includes cover page, executive summary, detailed tables
 - Color-coded status indicators
+- Escapes dynamic report content
+- Uses safe file URLs for HTML-to-PDF conversion
 - Falls back to HTML-only if PDF generation fails
 
 ## Original Scripts (Preserved)
 
 ### `capture-ghl-readonly.js`
-Captures all currently open GoHighLevel browser tabs with desktop/mobile screenshots.
+Captures currently open GoHighLevel app tabs with desktop/mobile screenshots. It filters to safe GoHighLevel app URLs and disconnects from CDP without closing the browser.
 
 ### `section-walk-ghl-readonly.js`
-Walks through major sidebar sections (Dashboard, Opportunities, Sites, Marketing, Automation, Reputation, Reporting) clicking each and capturing screenshots.
+Walks through major sections (Dashboard, Opportunities, Sites, Marketing, Automation, Reputation, Reporting) by navigating to known read-only routes instead of clicking arbitrary sidebar text.
 
 ### `deep-ghl-readonly-crawl.js`
 Deep location crawl from predefined seed routes. Covers dashboard, conversations, calendars, contacts, opportunities, payments, AI agents, marketing, automation, sites, memberships, reputation, reporting, integrations, settings.
@@ -262,6 +309,8 @@ GHL_LOCATION_ID=your_location_id GHL_FUNNELS_JSON=/path/to/funnels.json node fun
 - Use environment variables or JSON config files for run-specific data.
 - The scripts are designed for evidence gathering, not mutation.
 - The deep crawler has a deny list for risky URLs, and the main audit tool extends this with additional safety checks.
+- Full audits require `GHL_LOCATION_ID`; open-tab-only runs require explicit `OPEN_TABS_ONLY=1`.
+- Attached CDP sessions use `browser.disconnect()` instead of `browser.close()` so the tool does not close a user browser.
 - The tool uses a dedicated Chrome user data directory (`~/.audit-tool-chrome-profile`) to avoid interfering with your regular Chrome profile.
 
 ## Validation
@@ -276,6 +325,12 @@ Or run the check script:
 
 ```bash
 npm run check
+```
+
+The offline test suite covers config validation, URL safety, admin-shutoff detection, page readiness polling, PDF report escaping, issue text rendering, and workflow selector validity:
+
+```bash
+npm test
 ```
 
 ## Git

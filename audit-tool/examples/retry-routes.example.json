@@ -1,0 +1,8 @@
+[
+  {
+    "name": "example-slow-page",
+    "path": "/example/path",
+    "expect": ["Expected Text"],
+    "minBody": 500
+  }
+]

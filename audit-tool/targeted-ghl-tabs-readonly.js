@@ -2,9 +2,10 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
 const { outputPath, requireLocationId } = require("./audit-paths");
+const { CDP_URL } = require("./lib/chrome");
+const { getDefaultContext } = require("./lib/browser-context");
+const { isSafeReadOnlyUrl } = require("./lib/safety");
 
-const LOCATION_ID = requireLocationId();
-const BASE = `https://app.gohighlevel.com/v2/location/${LOCATION_ID}`;
 const OUT = outputPath("deep-ghl-audit", "targeted");
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -50,14 +51,19 @@ async function extract(page) {
 }
 
 async function main() {
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
-  const ctx = browser.contexts()[0];
+  const locationId = requireLocationId();
+  const base = `https://app.gohighlevel.com/v2/location/${locationId}`;
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  const ctx = getDefaultContext(browser);
   const page = await ctx.newPage();
   await page.setViewportSize({ width: 1440, height: 1000 });
   const records = [];
   for (const [name, route] of routes) {
-    const record = { name, url: BASE + route, ok: false, text: {}, screenshot: "" };
+    const record = { name, url: base + route, ok: false, text: {}, screenshot: "" };
     try {
+      if (!isSafeReadOnlyUrl(record.url, { base })) {
+        throw new Error("Route failed read-only safety validation");
+      }
       await page.goto(record.url, { waitUntil: "domcontentloaded", timeout: 45000 });
       await page.waitForTimeout(15000);
       record.text = await extract(page);
@@ -73,6 +79,7 @@ async function main() {
     records.push(record);
   }
   await page.close().catch(() => {});
+  browser.disconnect();
   fs.writeFileSync(path.join(OUT, "targeted-tabs.json"), JSON.stringify(records, null, 2));
   fs.writeFileSync(path.join(OUT, "targeted-tabs-summary.md"), records.flatMap((r) => [
     `# ${r.name}`,
@@ -82,10 +89,13 @@ async function main() {
     (r.text.body || "").slice(0, 2500),
     "",
   ]).join("\n"));
-  process.exit(0);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = { extract, main, routes };

@@ -2,14 +2,16 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
 const { outputPath, requireLocationId } = require("./audit-paths");
+const { CDP_URL } = require("./lib/chrome");
+const { getDefaultContext } = require("./lib/browser-context");
+const { loadRetryRoutes } = require("./lib/config");
+const { isSafeReadOnlyUrl, safeFileName } = require("./lib/safety");
 
-const LOCATION_ID = requireLocationId();
-const BASE = `https://app.gohighlevel.com/v2/location/${LOCATION_ID}`;
 const OUT = outputPath("deep-ghl-audit", "missed-retry-30s");
 const SHOTS = path.join(OUT, "screenshots");
 fs.mkdirSync(SHOTS, { recursive: true });
 
-const routes = [
+const defaultRoutes = [
   { name: "automation-workflows", path: "/automation/workflows", expect: ["Automation", "Workflows"], minBody: 650 },
   { name: "automation-workflow-folders", path: "/automation/workflows/folders", expect: ["Automation", "Workflows"], minBody: 650 },
 
@@ -52,15 +54,11 @@ const routes = [
 ];
 
 function loadExtraRoutes() {
-  const configPath = process.env.GHL_RETRY_ROUTES_JSON;
-  if (!configPath) return [];
-  return JSON.parse(fs.readFileSync(path.resolve(configPath), "utf8"));
+  return loadRetryRoutes(process.env);
 }
 
-routes.push(...loadExtraRoutes());
-
 function safeName(value) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+  return safeFileName(value, 120);
 }
 
 async function pageFacts(page) {
@@ -130,14 +128,18 @@ async function waitForMeaningful(page, route) {
 }
 
 async function main() {
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
-  const context = browser.contexts()[0];
+  const locationId = requireLocationId();
+  const base = `https://app.gohighlevel.com/v2/location/${locationId}`;
+  const routes = [...defaultRoutes, ...loadExtraRoutes()];
+
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  const context = getDefaultContext(browser);
   const page = await context.newPage();
   await page.setViewportSize({ width: 1440, height: 1000 });
   const records = [];
 
   for (const route of routes) {
-    const url = BASE + route.path;
+    const url = base + route.path;
     const record = {
       name: route.name,
       url,
@@ -150,6 +152,9 @@ async function main() {
     };
 
     try {
+      if (!isSafeReadOnlyUrl(url, { base })) {
+        throw new Error("Route failed read-only safety validation");
+      }
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
       const result = await waitForMeaningful(page, route);
       record.status = result.status;
@@ -175,6 +180,7 @@ async function main() {
   }
 
   await page.close().catch(() => {});
+  browser.disconnect();
   fs.writeFileSync(path.join(OUT, "missed-retry-30s.json"), JSON.stringify(records, null, 2));
 
   const summary = [
@@ -213,10 +219,21 @@ async function main() {
 
   fs.writeFileSync(path.join(OUT, "missed-retry-30s-summary.md"), summary);
   console.log(`Wrote ${path.join(OUT, "missed-retry-30s-summary.md")}`);
-  process.exit(0);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  defaultRoutes,
+  isMeaningful,
+  loadExtraRoutes,
+  main,
+  pageFacts,
+  safeName,
+  waitForMeaningful,
+};

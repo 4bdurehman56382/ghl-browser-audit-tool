@@ -2,12 +2,13 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
 const { outputPath, requireLocationId } = require("./audit-paths");
+const { CDP_URL } = require("./lib/chrome");
+const { getDefaultContext } = require("./lib/browser-context");
+const { parsePositiveInteger } = require("./lib/config");
+const { isSafeReadOnlyUrl, normalizeGhlUrl, safeNameFromUrl } = require("./lib/safety");
 
-const LOCATION_ID = requireLocationId();
-const BASE = `https://app.gohighlevel.com/v2/location/${LOCATION_ID}`;
 const OUT = outputPath("deep-ghl-audit");
 const SHOTS = path.join(OUT, "screenshots");
-const MAX_PAGES = Number(process.env.MAX_PAGES || 120);
 
 fs.mkdirSync(SHOTS, { recursive: true });
 
@@ -68,47 +69,16 @@ const seeds = [
   "/settings/objects",
 ];
 
-function normalizeUrl(url) {
-  try {
-    const u = new URL(url, BASE);
-    u.hash = "";
-    const badParams = ["modal", "drawer", "showModal"];
-    for (const p of badParams) u.searchParams.delete(p);
-    return u.toString();
-  } catch {
-    return "";
-  }
+function normalizeUrl(url, base) {
+  return normalizeGhlUrl(url, base);
 }
 
 function safeName(url) {
-  const u = new URL(url);
-  return (u.pathname.replace(`/v2/location/${LOCATION_ID}/`, "") || "root")
-    .replace(/[^a-z0-9]+/gi, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 100)
-    .toLowerCase() || "page";
+  return safeNameFromUrl(url, 100);
 }
 
-function shouldVisit(url) {
-  if (!url) return false;
-  if (!url.startsWith(BASE)) return false;
-  const lower = url.toLowerCase();
-  const deny = [
-    "signout",
-    "logout",
-    "delete",
-    "remove",
-    "disconnect",
-    "unsubscribe",
-    "checkout",
-    "purchase",
-    "impersonate",
-    "oauth",
-    "callback",
-    "export",
-    "import",
-  ];
-  return !deny.some((x) => lower.includes(x));
+function shouldVisit(url, base) {
+  return isSafeReadOnlyUrl(normalizeUrl(url, base), { base });
 }
 
 async function extractFacts(page) {
@@ -162,12 +132,15 @@ async function extractFacts(page) {
 }
 
 async function main() {
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
-  const context = browser.contexts()[0];
+  const locationId = requireLocationId();
+  const base = `https://app.gohighlevel.com/v2/location/${locationId}`;
+  const maxPages = parsePositiveInteger(process.env.MAX_PAGES, 120, "MAX_PAGES");
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  const context = getDefaultContext(browser);
   const page = await context.newPage();
   await page.setViewportSize({ width: 1440, height: 1000 });
 
-  const queue = seeds.map((path) => ({ url: normalizeUrl(BASE + path), depth: 0, seed: true }));
+  const queue = seeds.map((routePath) => ({ url: normalizeUrl(base + routePath, base), depth: 0, seed: true }));
   const visited = new Set();
   const records = [];
   const networkIssues = [];
@@ -186,10 +159,10 @@ async function main() {
     }
   });
 
-  while (queue.length && records.length < MAX_PAGES) {
+  while (queue.length && records.length < maxPages) {
     const item = queue.shift();
-    const url = normalizeUrl(item.url);
-    if (!shouldVisit(url) || visited.has(url)) continue;
+    const url = normalizeUrl(item.url, base);
+    if (!shouldVisit(url, base) || visited.has(url)) continue;
     visited.add(url);
 
     const beforeIssues = networkIssues.length;
@@ -216,10 +189,10 @@ async function main() {
       record.ok = true;
 
       const internalLinks = (record.facts.links || [])
-        .map((x) => normalizeUrl(x.href))
-        .filter(shouldVisit);
+        .map((x) => normalizeUrl(x.href, base))
+        .filter((link) => shouldVisit(link, base));
       for (const link of internalLinks) {
-        if (!visited.has(link) && item.depth < 1 && queue.length + records.length < MAX_PAGES) {
+        if (!visited.has(link) && item.depth < 1 && queue.length + records.length < maxPages) {
           queue.push({ url: link, depth: item.depth + 1, seed: false });
         }
       }
@@ -229,10 +202,11 @@ async function main() {
 
     record.issues.push(...networkIssues.slice(beforeIssues, beforeIssues + 30));
     records.push(record);
-    console.log(`${records.length}/${MAX_PAGES} ${record.ok ? "ok" : "err"} ${url}`);
+    console.log(`${records.length}/${maxPages} ${record.ok ? "ok" : "err"} ${url}`);
   }
 
   await page.close().catch(() => {});
+  browser.disconnect();
 
   const jsonPath = path.join(OUT, "deep-crawl.json");
   fs.writeFileSync(jsonPath, JSON.stringify({ records, networkIssues }, null, 2));
@@ -269,10 +243,13 @@ async function main() {
   ].join("\n");
   fs.writeFileSync(path.join(OUT, "deep-crawl-summary.md"), summary);
   console.log(`Wrote ${jsonPath}`);
-  process.exit(0);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = { extractFacts, main, normalizeUrl, safeName, shouldVisit };

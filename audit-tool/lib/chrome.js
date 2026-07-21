@@ -3,11 +3,25 @@ const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { parsePositiveInteger } = require("./config");
 
-const CDP_PORT = 9222;
-const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
+const requestedCdpUrl = (process.env.AUDIT_CDP_URL || "").replace(/\/+$/, "");
+const requestedPort = process.env.AUDIT_CDP_PORT;
+const CDP_PORT = requestedCdpUrl
+  ? parsePositiveInteger(new URL(requestedCdpUrl).port || 80, 9222, "AUDIT_CDP_URL port")
+  : parsePositiveInteger(requestedPort, 9222, "AUDIT_CDP_PORT");
+const CDP_URL = requestedCdpUrl || `http://127.0.0.1:${CDP_PORT}`;
+const ATTACH_EXISTING_CDP = process.env.AUDIT_ATTACH_EXISTING_CDP === "1";
 
 function findChrome() {
+  if (process.env.CHROME_PATH) {
+    const configured = path.resolve(process.env.CHROME_PATH);
+    if (!fs.existsSync(configured)) {
+      throw new Error(`CHROME_PATH does not exist: ${configured}`);
+    }
+    return configured;
+  }
+
   const candidates = [];
   if (process.platform === "linux") {
     candidates.push(
@@ -48,8 +62,8 @@ function isCdpAlive() {
       res.on("data", (chunk) => data += chunk);
       res.on("end", () => {
         try {
-          JSON.parse(data);
-          resolve(true);
+          const info = JSON.parse(data);
+          resolve(Boolean(info.webSocketDebuggerUrl || info.Browser || info["Protocol-Version"]));
         } catch {
           resolve(false);
         }
@@ -86,6 +100,7 @@ function printWarning() {
     "  - You must be logged into GoHighLevel in the launched browser.",
     "  - Set GHL_LOCATION_ID environment variable for location-specific audits.",
     "  - Port 9222 must be available.",
+    "  - Set AUDIT_ATTACH_EXISTING_CDP=1 before attaching to an already-running CDP browser.",
     "",
     "\x1b[1;33m" + "=".repeat(68) + "\x1b[0m",
     "",
@@ -111,8 +126,18 @@ async function launchChrome() {
   }
 
   if (await isCdpAlive()) {
+    if (!ATTACH_EXISTING_CDP) {
+      throw new Error(
+        `Chrome DevTools Protocol is already available at ${CDP_URL}. ` +
+        "Set AUDIT_ATTACH_EXISTING_CDP=1 if you intentionally want to attach to it."
+      );
+    }
     console.log("\x1b[1;32m✓ Chrome DevTools Protocol already running on port 9222\x1b[0m");
-    return { launched: false, port: CDP_PORT };
+    return { launched: false, port: CDP_PORT, url: CDP_URL };
+  }
+
+  if (requestedCdpUrl && !requestedCdpUrl.startsWith("http://127.0.0.1") && !requestedCdpUrl.startsWith("http://localhost")) {
+    throw new Error("AUDIT_CDP_URL points to a remote endpoint. Start/connect to that browser yourself with AUDIT_ATTACH_EXISTING_CDP=1.");
   }
 
   const userDataDir = path.join(
@@ -140,11 +165,14 @@ async function launchChrome() {
     "--disable-prompt-on-repost",
     "--disable-renderer-backgrounding",
     "--disable-dev-shm-usage",
-    "--no-sandbox",
     "--window-size=1440,900",
     "--window-position=0,0",
     "about:blank",
   ];
+
+  if (process.env.AUDIT_CHROME_NO_SANDBOX === "1") {
+    args.splice(args.length - 1, 0, "--no-sandbox");
+  }
 
   console.log("\x1b[1;36m  Launching Chrome with remote debugging on port 9222...\x1b[0m");
 
@@ -164,7 +192,7 @@ async function launchChrome() {
   }
 
   console.log("\x1b[1;32m✓ Chrome launched with remote debugging on port 9222\x1b[0m");
-  return { launched: true, port: CDP_PORT };
+  return { launched: true, port: CDP_PORT, url: CDP_URL };
 }
 
-module.exports = { launchChrome, isCdpAlive, printWarning, CDP_URL, CDP_PORT };
+module.exports = { launchChrome, isCdpAlive, printWarning, CDP_URL, CDP_PORT, findChrome };

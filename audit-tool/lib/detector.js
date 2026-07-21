@@ -25,13 +25,10 @@ async function extractReadableContent(page) {
   }
 }
 
-async function detectShutoff(page) {
+async function detectShutoff(page, options = {}) {
+  const { detectEmpty = true } = options;
   const url = page.url().toLowerCase();
   const content = await extractReadableContent(page);
-
-  if (content.bodyLength < 50) {
-    return { shutoff: true, reason: "Empty or near-empty page body", type: "empty_body" };
-  }
 
   if (url.includes("login") || url.includes("signin") || url.includes("sign-in")) {
     return { shutoff: true, reason: "Page redirected to login", type: "redirected_to_login" };
@@ -48,11 +45,15 @@ async function detectShutoff(page) {
     }
   }
 
+  if (detectEmpty && content.bodyLength < 50) {
+    return { shutoff: true, reason: "Empty or near-empty page body", type: "empty_body" };
+  }
+
   return { shutoff: false, reason: null, type: null };
 }
 
-async function isAdminShutoff(page) {
-  const result = await detectShutoff(page);
+async function isAdminShutoff(page, options) {
+  const result = await detectShutoff(page, options);
   return result.shutoff;
 }
 

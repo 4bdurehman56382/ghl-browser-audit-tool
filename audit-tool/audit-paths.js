@@ -1,22 +1,16 @@
 const path = require("path");
+const { requireLocationId, resolveOutputRoot } = require("./lib/config");
 
-const outputRoot = path.resolve(
-  process.env.AUDIT_OUTPUT_DIR || path.join(__dirname, "..", "client-materials", "audit-output")
-);
+const DEFAULT_OUTPUT_ROOT = path.join(__dirname, "..", "client-materials", "audit-output");
+const WORKSPACE_ROOT = path.join(__dirname, "..");
 
 function outputPath(...parts) {
-  return path.join(outputRoot, ...parts);
-}
-
-function requireLocationId() {
-  const locationId = process.env.GHL_LOCATION_ID;
-  if (!locationId) {
-    throw new Error("Set GHL_LOCATION_ID before running this location-specific audit script.");
-  }
-  return locationId;
+  return path.join(resolveOutputRoot(process.env, DEFAULT_OUTPUT_ROOT, WORKSPACE_ROOT), ...parts);
 }
 
 module.exports = {
   outputPath,
   requireLocationId,
+  DEFAULT_OUTPUT_ROOT,
+  WORKSPACE_ROOT,
 };

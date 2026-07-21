@@ -1,12 +1,23 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
-const { outputPath } = require("./audit-paths");
+const { outputPath, requireLocationId } = require("./audit-paths");
+const { CDP_URL } = require("./lib/chrome");
+const { getDefaultContext } = require("./lib/browser-context");
+const { isSafeReadOnlyUrl } = require("./lib/safety");
 
 const OUT = outputPath("section-walk");
 fs.mkdirSync(OUT, { recursive: true });
 
-const sections = ["Dashboard", "Opportunities", "Sites", "Marketing", "Automation", "Reputation", "Reporting"];
+const sections = [
+  ["Dashboard", "/dashboard"],
+  ["Opportunities", "/opportunities/list"],
+  ["Sites", "/funnels-websites/funnels"],
+  ["Marketing", "/marketing/social-planner"],
+  ["Automation", "/automation/workflows"],
+  ["Reputation", "/reputation/overview"],
+  ["Reporting", "/reporting/reports"],
+];
 
 const safe = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
@@ -33,18 +44,23 @@ async function facts(page) {
 }
 
 async function main() {
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
-  const context = browser.contexts()[0];
-  let page = context.pages().find((p) => p.url().includes("app.gohighlevel.com/v2/location/"));
-  if (!page) throw new Error("No GHL location page found");
+  const locationId = requireLocationId();
+  const base = `https://app.gohighlevel.com/v2/location/${locationId}`;
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  const context = getDefaultContext(browser);
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1440, height: 1000 });
 
   const records = [];
-  for (const section of sections) {
-    const item = page.getByText(section, { exact: true }).first();
-    await item.click({ timeout: 10000 }).catch(() => {});
+  for (const [section, route] of sections) {
+    const url = base + route;
+    if (!isSafeReadOnlyUrl(url, { base })) {
+      records.push({ section, url, error: "Route failed read-only safety validation" });
+      continue;
+    }
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
     await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(3500);
-    await page.setViewportSize({ width: 1440, height: 1000 });
     const file = path.join(OUT, `${safe(section)}.png`);
     await page.screenshot({ path: file, fullPage: true }).catch(() => {});
     const record = { section, screenshot: path.relative(process.cwd(), file), ...(await facts(page).catch((e) => ({ error: e.message }))) };
@@ -65,11 +81,16 @@ async function main() {
     (r.body || "").slice(0, 1800),
     "",
   ]).join("\n"));
-  await browser.close();
+  await page.close().catch(() => {});
+  browser.disconnect();
   console.log(`Captured ${records.length} sections`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err?.message || err);
+    process.exit(1);
+  });
+}
+
+module.exports = { facts, main, sections };

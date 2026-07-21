@@ -11,8 +11,8 @@
     "targeted": "node targeted-ghl-tabs-readonly.js",
     "retry-missed": "node retry-missed-pages-30s.js",
     "funnel-tabs": "node funnel-tabs-readonly.js",
-    "check": "node --check audit.js && node --check lib/chrome.js && node --check lib/cursor.js && node --check lib/detector.js && node --check lib/scanner.js && node --check lib/workflows.js && node --check lib/report-pdf.js",
-    "test": "npm run check"
+    "check": "find . -path ./node_modules -prune -o -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "test": "npm run check && node --test"
   },
   "keywords": ["audit", "gohighlevel", "browser-automation", "read-only", "playwright"],
   "author": "",

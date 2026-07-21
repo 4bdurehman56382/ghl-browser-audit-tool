@@ -1,5 +1,12 @@
 const path = require("path");
 const fs = require("fs");
+const { pathToFileURL } = require("url");
+
+function issueText(issue) {
+  if (!issue) return "Unknown";
+  if (typeof issue === "string") return issue;
+  return issue.text || issue.message || issue.type || "Unknown";
+}
 
 function buildHtmlReport(auditResults, locationId) {
   const now = new Date().toISOString().replace(/[:.]/g, "-");
@@ -154,7 +161,7 @@ ${shutoffRows ? `
     <thead><tr><th>Page</th><th>Issue</th></tr></thead>
     <tbody>
       ${auditResults.pages.flatMap((p) => (p.issues || []).map((iss) => `
-        <tr><td>${escapeHtml(p.name || p.url || "")}</td><td style="color:#e74c3c;">${escapeHtml(typeof iss === "string" ? iss : iss.message || iss.type || "Unknown")}</td></tr>
+        <tr><td>${escapeHtml(p.name || p.url || "")}</td><td style="color:#e74c3c;">${escapeHtml(issueText(iss))}</td></tr>
       `)).join("")}
     </tbody>
   </table>` : `<p style="color:#27ae60;">No console or network issues detected.</p>`}
@@ -192,7 +199,7 @@ async function generatePdf(browser, auditResults, locationId, outputDir) {
     const context = browser.contexts()[0];
     const pdfPage = await context.newPage();
     await pdfPage.setViewportSize({ width: 1200, height: 1600 });
-    await pdfPage.goto(`file://${htmlPath}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await pdfPage.goto(pathToFileURL(htmlPath).href, { waitUntil: "domcontentloaded", timeout: 30000 });
     await pdfPage.waitForTimeout(2000);
 
     await pdfPage.pdf({
@@ -212,4 +219,4 @@ async function generatePdf(browser, auditResults, locationId, outputDir) {
   }
 }
 
-module.exports = { generatePdf, buildHtmlReport };
+module.exports = { generatePdf, buildHtmlReport, issueText };

@@ -2,17 +2,13 @@ const path = require("path");
 const fs = require("fs");
 const { injectCursor, moveCursor, animateCursorAcross, moveToElement, hideCursor } = require("./cursor");
 const { detectShutoff, extractReadableContent } = require("./detector");
+const { safeNameFromUrl } = require("./safety");
 
 const PAGE_LOAD_TIMEOUT_MS = 45 * 1000;
 const NAVIGATION_TIMEOUT_MS = 60000;
 
 function safeName(url) {
-  const u = new URL(url);
-  return (u.pathname.replace(/\/v2\/location\/[^/]+\//, "") || "root")
-    .replace(/[^a-z0-9]+/gi, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 100)
-    .toLowerCase() || "page";
+  return safeNameFromUrl(url, 100);
 }
 
 async function extractPageData(page) {
@@ -71,12 +67,14 @@ function isPageMeaningful(bodyText, minLength = 300) {
   return (bodyText || "").length >= minLength;
 }
 
-async function waitForPageReady(page, route, minBodyLength = 300) {
+async function waitForPageReady(page, route, minBodyLength = 300, options = {}) {
+  const timeoutMs = options.timeoutMs ?? PAGE_LOAD_TIMEOUT_MS;
+  const sleep = options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const start = Date.now();
   let lastBody = "";
   let checkCount = 0;
 
-  while (Date.now() - start < PAGE_LOAD_TIMEOUT_MS) {
+  while (Date.now() - start < timeoutMs) {
     checkCount++;
     try {
       const content = await extractReadableContent(page);
@@ -94,20 +92,20 @@ async function waitForPageReady(page, route, minBodyLength = 300) {
 
     const elapsed = Date.now() - start;
     const elapsedMin = Math.floor(elapsed / 60000);
-    const remainingMin = Math.floor((PAGE_LOAD_TIMEOUT_MS - elapsed) / 60000);
+    const remainingSec = Math.max(0, Math.ceil((timeoutMs - elapsed) / 1000));
 
     if (checkCount % 10 === 0 && elapsed > 5000) {
-      process.stdout.write(`\r  Waiting for page... ${elapsedMin}m elapsed, ${remainingMin}m remaining, body=${lastBody.length} chars`);
+      process.stdout.write(`\r  Waiting for page... ${elapsedMin}m elapsed, ${remainingSec}s remaining, body=${lastBody.length} chars`);
     }
 
-    const wait = Math.min(3000, Math.max(500, (PAGE_LOAD_TIMEOUT_MS - elapsed) / 20));
-    await new Promise((r) => setTimeout(r, wait));
+    const wait = Math.min(3000, Math.max(50, (timeoutMs - elapsed) / 20));
+    await sleep(wait);
   }
 
   process.stdout.write("\n");
   return {
     status: "timed_out",
-    waitedMs: PAGE_LOAD_TIMEOUT_MS,
+    waitedMs: timeoutMs,
     checks: checkCount,
     bodyText: lastBody,
   };
@@ -133,12 +131,14 @@ async function scanSinglePage(page, url, name, screenshotsDir, counter) {
   };
 
   const issues = [];
-  page.on("console", (msg) => {
+  const onConsole = (msg) => {
     if (["error", "warning"].includes(msg.type())) {
       issues.push({ type: msg.type(), text: msg.text().slice(0, 200) });
     }
-  });
-  page.on("pageerror", (err) => issues.push({ type: "pageerror", text: err.message.slice(0, 200) }));
+  };
+  const onPageError = (err) => issues.push({ type: "pageerror", text: err.message.slice(0, 200) });
+  page.on("console", onConsole);
+  page.on("pageerror", onPageError);
 
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
@@ -146,7 +146,7 @@ async function scanSinglePage(page, url, name, screenshotsDir, counter) {
 
     const beforeIssues = issues.length;
 
-    const shutoffResult = await detectShutoff(page);
+    let shutoffResult = await detectShutoff(page, { detectEmpty: false });
     if (shutoffResult.shutoff) {
       record.shutoff = true;
       record.shutoffType = shutoffResult.type;
@@ -160,6 +160,24 @@ async function scanSinglePage(page, url, name, screenshotsDir, counter) {
     const loadResult = await waitForPageReady(page, url);
     record.loadTimeSeconds = Math.round(loadResult.waitedMs / 1000);
     record.bodyText = loadResult.bodyText;
+
+    shutoffResult = await detectShutoff(page, { detectEmpty: false });
+    if (shutoffResult.shutoff) {
+      record.shutoff = true;
+      record.shutoffType = shutoffResult.type;
+      record.shutoffReason = shutoffResult.reason;
+      record.issues = issues.slice(beforeIssues);
+      console.log(`  \x1b[1;33m⚠ SKIPPED (shut off): ${name} - ${shutoffResult.reason}\x1b[0m`);
+      return record;
+    }
+
+    if (loadResult.status !== "loaded") {
+      record.issues.push({
+        type: "page_timeout",
+        text: "Page did not reach 300 visible body characters within " +
+          `${Math.round(loadResult.waitedMs / 1000)} seconds.`,
+      });
+    }
 
     await moveToElement(page, "h1", 15).catch(() => {});
     await new Promise((r) => setTimeout(r, 400));
@@ -197,12 +215,22 @@ async function scanSinglePage(page, url, name, screenshotsDir, counter) {
       record.buttonsCount = (pageData.buttons || []).length;
     }
 
-    record.issues = issues.slice(beforeIssues);
-    record.ok = true;
-    console.log(`  \x1b[1;32m✓ ${name} (${record.loadTimeSeconds}s, ${record.headingsCount} headings, ${record.bodyText.length} chars)\x1b[0m`);
+    record.issues.push(...issues.slice(beforeIssues));
+    record.ok = loadResult.status === "loaded";
+    const color = record.ok ? "\x1b[1;32m" : "\x1b[1;33m";
+    const mark = record.ok ? "✓" : "⚠";
+    console.log(`  ${color}${mark} ${name} (${record.loadTimeSeconds}s, ${record.headingsCount} headings, ${record.bodyText.length} chars)\x1b[0m`);
   } catch (error) {
     record.issues.push({ type: "navigation_error", text: error.message });
     console.log(`  \x1b[1;31m✗ ${name}: ${error.message}\x1b[0m`);
+  } finally {
+    if (typeof page.off === "function") {
+      page.off("console", onConsole);
+      page.off("pageerror", onPageError);
+    } else if (typeof page.removeListener === "function") {
+      page.removeListener("console", onConsole);
+      page.removeListener("pageerror", onPageError);
+    }
   }
 
   return record;
@@ -218,4 +246,12 @@ async function scanSectionWalk(page, sectionRoutes, screenshotsDir, counter = 0)
   return records;
 }
 
-module.exports = { scanSinglePage, scanSectionWalk, extractPageData, safeName, waitForPageReady, PAGE_LOAD_TIMEOUT_MS };
+module.exports = {
+  extractPageData,
+  isPageMeaningful,
+  PAGE_LOAD_TIMEOUT_MS,
+  safeName,
+  scanSectionWalk,
+  scanSinglePage,
+  waitForPageReady,
+};

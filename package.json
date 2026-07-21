@@ -1,0 +1,12 @@
+{
+  "name": "ghl-browser-audit-tool-repo",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Forkable, AI-importable repository wrapper for the read-only GoHighLevel browser audit tool.",
+  "scripts": {
+    "audit": "npm --prefix audit-tool run audit",
+    "check": "npm --prefix audit-tool run check",
+    "test": "npm --prefix audit-tool test"
+  },
+  "license": "ISC"
+}

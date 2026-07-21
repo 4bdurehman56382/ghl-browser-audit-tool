@@ -2,18 +2,16 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
 const { outputPath } = require("./audit-paths");
+const { CDP_URL } = require("./lib/chrome");
+const { getDefaultContext } = require("./lib/browser-context");
+const { isSafeReadOnlyUrl, safeFileName } = require("./lib/safety");
 
 const OUT = outputPath();
 const SHOTS = path.join(OUT, "screenshots");
 fs.mkdirSync(SHOTS, { recursive: true });
 
 function safeName(url) {
-  return url
-    .replace(/^https?:\/\//, "")
-    .replace(/[^a-z0-9]+/gi, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 90)
-    .toLowerCase() || "page";
+  return safeFileName(url, 90);
 }
 
 async function readVisiblePage(page) {
@@ -71,11 +69,10 @@ async function readVisiblePage(page) {
 }
 
 async function main() {
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
-  const context = browser.contexts()[0];
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  const context = getDefaultContext(browser);
   const pages = context.pages().filter((p) => {
-    const url = p.url();
-    return url.startsWith("https://app.gohighlevel.com/") || url.includes("gohighlevel");
+    return isSafeReadOnlyUrl(p.url(), { base: "https://app.gohighlevel.com/" });
   });
 
   const results = [];
@@ -147,11 +144,15 @@ async function main() {
     ].join("\n")
   );
 
-  await browser.close();
+  browser.disconnect();
   console.log(`Captured ${results.length} GHL page(s) into ${OUT}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err?.message || err);
+    process.exit(1);
+  });
+}
+
+module.exports = { main, readVisiblePage, safeName };

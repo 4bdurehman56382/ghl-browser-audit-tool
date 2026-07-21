@@ -1,7 +1,10 @@
 node_modules/
 *.log
 .DS_Store
+.env
+*.local
 .audit-tool-chrome-profile/
+client-materials/
 client-materials/audit-output/
 client-materials/Dashboard/
 client-materials/Opportunities/

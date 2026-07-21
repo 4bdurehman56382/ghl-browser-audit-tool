@@ -4,18 +4,23 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 const { chromium } = require("playwright-core");
-const { outputPath, requireLocationId } = require("./audit-paths");
+const { outputPath } = require("./audit-paths");
 const { launchChrome, printWarning, CDP_URL } = require("./lib/chrome");
 const { scanSinglePage } = require("./lib/scanner");
 const { crawlAllWorkflows } = require("./lib/workflows");
 const { generatePdf } = require("./lib/report-pdf");
 const { injectCursor, hideCursor } = require("./lib/cursor");
+const { optionalLocationId, parsePositiveInteger } = require("./lib/config");
+const { getDefaultContext } = require("./lib/browser-context");
+const { isSafeReadOnlyUrl, normalizeGhlUrl, safeFileName } = require("./lib/safety");
 
-const LOCATION_ID = process.env.GHL_LOCATION_ID || "";
+const LOCATION_ID = optionalLocationId();
 const BASE = LOCATION_ID ? `https://app.gohighlevel.com/v2/location/${LOCATION_ID}` : "";
 const OUT = outputPath();
 const SCREENSHOTS_DIR = path.join(OUT, "screenshots");
-const MAX_PAGES = Number(process.env.MAX_PAGES || 200);
+const MAX_PAGES = parsePositiveInteger(process.env.MAX_PAGES, 200, "MAX_PAGES");
+const OPEN_TABS_ONLY = process.env.OPEN_TABS_ONLY === "1";
+const ALLOW_ALL_GHL_TABS = process.env.AUDIT_ALLOW_ALL_GHL_TABS === "1";
 
 const GOPAGE_SELECTORS = [
   "a[href*='gohighlevel']",
@@ -29,25 +34,19 @@ const GOPAGE_SELECTORS = [
 ];
 
 function normalizeUrl(url) {
-  try {
-    const u = new URL(url, BASE);
-    u.hash = "";
-    ["modal", "drawer", "showModal", "preview"].forEach((p) => u.searchParams.delete(p));
-    return u.toString();
-  } catch {
-    return "";
-  }
+  return normalizeGhlUrl(url, BASE || "https://app.gohighlevel.com/");
 }
 
 function shouldVisit(url) {
-  if (!url || !url.startsWith("https://app.gohighlevel.com/")) return false;
-  const lower = url.toLowerCase();
-  const deny = [
-    "signout", "logout", "delete", "remove", "disconnect",
-    "unsubscribe", "checkout", "purchase", "impersonate",
-    "oauth", "callback", "export", "import", "webhook",
-  ];
-  return !deny.some((x) => lower.includes(x));
+  const normalized = normalizeUrl(url);
+  return isSafeReadOnlyUrl(normalized, { base: BASE || "https://app.gohighlevel.com/" });
+}
+
+function shouldCaptureOpenTab(url) {
+  const normalized = normalizeGhlUrl(url, "https://app.gohighlevel.com/");
+  if (!normalized) return false;
+  if (!ALLOW_ALL_GHL_TABS && BASE && normalized !== BASE && !normalized.startsWith(`${BASE}/`)) return false;
+  return isSafeReadOnlyUrl(normalized, { base: BASE || "https://app.gohighlevel.com/" });
 }
 
 function buildSeedRoutes() {
@@ -174,9 +173,12 @@ async function main() {
 
   printWarning();
 
-  if (!LOCATION_ID) {
-    console.log("\x1b[1;33m  Note: GHL_LOCATION_ID not set. Only open-tab capture will work.\x1b[0m");
-    console.log("\x1b[1;33m  Set it for full location-specific audit.\x1b[0m\n");
+  if (!LOCATION_ID && !OPEN_TABS_ONLY) {
+    throw new Error("Set GHL_LOCATION_ID for a full audit, or set OPEN_TABS_ONLY=1 for explicit open-tab capture.");
+  }
+
+  if (!LOCATION_ID && OPEN_TABS_ONLY) {
+    console.log("\x1b[1;33m  OPEN_TABS_ONLY=1 set. Location-specific crawl and workflows will be skipped.\x1b[0m\n");
   }
 
   const confirmed = await askConfirmation();
@@ -201,7 +203,7 @@ async function main() {
     process.exit(1);
   }
 
-  const context = browser.contexts()[0];
+  const context = getDefaultContext(browser);
   const mainPage = await context.newPage();
   await mainPage.setViewportSize({ width: 1440, height: 1000 });
 
@@ -209,7 +211,7 @@ async function main() {
   const allPages = [];
   const workflowRecords = [];
 
-  if (BASE) {
+  if (BASE && !OPEN_TABS_ONLY) {
     console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m");
     console.log("\x1b[1;36m  PHASE 1: Deep Page Audit (up to 45 sec wait per page)\x1b[0m");
     console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m\n");
@@ -265,8 +267,7 @@ async function main() {
   console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m\n");
 
   const openPages = context.pages().filter((p) => {
-    const url = p.url();
-    return url.startsWith("https://app.gohighlevel.com/") || url.includes("gohighlevel");
+    return shouldCaptureOpenTab(p.url());
   });
 
   console.log(`  Found ${openPages.length} open GHL tab(s)\n`);
@@ -288,7 +289,7 @@ async function main() {
         };
       }).catch(() => ({ title: "", bodyText: "" }));
 
-      const shotName = `tab-${i + 1}-${page.url().replace(/[^a-z0-9]+/gi, "-").slice(0, 80)}.png`;
+      const shotName = `tab-${i + 1}-${safeFileName(page.url(), 80)}.png`;
       const shotPath = path.join(SCREENSHOTS_DIR, shotName);
       await page.screenshot({ path: shotPath, fullPage: true, timeout: 30000 }).catch(() => {});
       allPages.push({
@@ -344,7 +345,7 @@ async function main() {
   console.log("\x1b[1;36m  PHASE 4: Generating PDF Report\x1b[0m");
   console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m\n");
 
-  const pdfPath = await generatePdf(browser, auditResults, LOCATION_ID || "no-location", OUT);
+  const pdfPath = await generatePdf(browser, auditResults, LOCATION_ID || "open-tabs-only", OUT);
 
   await mainPage.close().catch(() => {});
   console.log("\n\x1b[1;42m  AUDIT COMPLETE  \x1b[0m\n");
@@ -358,7 +359,7 @@ async function main() {
   if (pdfPath) console.log(`\x1b[1;37m  PDF report: ${pdfPath}\x1b[0m`);
   console.log(`\x1b[1;37m  Output directory: ${OUT}\x1b[0m\n`);
 
-  process.exit(0);
+  browser.disconnect();
 }
 
 function buildSummaryMd(results) {
@@ -409,17 +410,29 @@ function buildSummaryMd(results) {
   ].join("\n");
 }
 
-process.on("SIGINT", () => {
-  console.log("\n\x1b[1;31m  Audit interrupted by user.\x1b[0m\n");
-  process.exit(0);
-});
+if (require.main === module) {
+  process.on("SIGINT", () => {
+    console.log("\n\x1b[1;31m  Audit interrupted by user.\x1b[0m\n");
+    process.exit(0);
+  });
 
-process.on("unhandledRejection", (err) => {
-  console.error("\n\x1b[1;31m  Unhandled error:\x1b[0m", err);
-  process.exit(1);
-});
+  process.on("unhandledRejection", (err) => {
+    console.error("\n\x1b[1;31m  Unhandled error:\x1b[0m", err?.message || err);
+    process.exit(1);
+  });
 
-main().catch((error) => {
-  console.error("\x1b[1;31m  Fatal error:\x1b[0m", error);
-  process.exit(1);
-});
+  main().catch((error) => {
+    console.error("\x1b[1;31m  Fatal error:\x1b[0m", error?.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  buildSeedRoutes,
+  buildSummaryMd,
+  discoverInternalLinks,
+  main,
+  normalizeUrl,
+  shouldCaptureOpenTab,
+  shouldVisit,
+};

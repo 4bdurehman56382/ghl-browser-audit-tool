@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const { moveToElement, injectCursor, animateCursorAcross, moveCursor } = require("./cursor");
 const { detectShutoff } = require("./detector");
+const { isSafeReadOnlyUrl, normalizeGhlUrl, safeFileName } = require("./safety");
 
 const WORKFLOW_SELECTORS = [
   'a[href*="workflow"]',
@@ -11,8 +12,6 @@ const WORKFLOW_SELECTORS = [
   '.workflow-list-item a',
   '[role="row"] a',
   'a[href*="/automation/workflow/"]',
-  'button:has-text("Workflow")',
-  'a:has-text("Workflow")',
 ];
 
 const STEP_SELECTORS = [
@@ -35,7 +34,7 @@ async function navigateToWorkflows(page, BASE) {
   return page.url().includes("workflow");
 }
 
-async function findWorkflowLinks(page) {
+async function findWorkflowLinks(page, base) {
   const links = await page.evaluate((selectors) => {
     const clean = (v) => (v || "").replace(/\s+/g, " ").trim();
     const results = [];
@@ -57,7 +56,10 @@ async function findWorkflowLinks(page) {
     }
     return results;
   }, WORKFLOW_SELECTORS);
-  return links;
+
+  return links
+    .map((link) => ({ ...link, href: normalizeGhlUrl(link.href, base) }))
+    .filter((link) => isSafeReadOnlyUrl(link.href, { base }) && /\/automation\/workflow/i.test(link.href));
 }
 
 async function walkWorkflow(page, workflowUrl, name, screenshotsDir) {
@@ -87,7 +89,7 @@ async function walkWorkflow(page, workflowUrl, name, screenshotsDir) {
     await injectCursor(page);
     await animateCursorAcross(page, 2000);
 
-    const shotName = `${name.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80)}-overview.png`;
+    const shotName = `${safeFileName(name, 80)}-overview.png`;
     const shotPath = path.join(screenshotsDir, shotName);
     await page.screenshot({ path: shotPath, fullPage: true, timeout: 30000 }).catch(() => {});
     if (fs.existsSync(shotPath)) record.screenshots.push(shotPath);
@@ -130,7 +132,7 @@ async function walkWorkflow(page, workflowUrl, name, screenshotsDir) {
         await moveCursor(page, Math.round(step.rect.x + step.rect.w / 2), Math.round(step.rect.y + step.rect.h / 2), 25);
         await new Promise((r) => setTimeout(r, 800));
 
-        const stepShotName = `${name.replace(/[^a-z0-9]+/gi, "-").slice(0, 60)}-step-${i + 1}.png`;
+        const stepShotName = `${safeFileName(name, 60)}-step-${i + 1}.png`;
         const stepShotPath = path.join(screenshotsDir, stepShotName);
         await page.screenshot({ path: stepShotPath, fullPage: true, timeout: 30000 }).catch(() => {});
         if (fs.existsSync(stepShotPath)) {
@@ -163,7 +165,7 @@ async function crawlAllWorkflows(page, BASE, screenshotsDir) {
     return [];
   }
 
-  const links = await findWorkflowLinks(page);
+  const links = await findWorkflowLinks(page, BASE);
   console.log(`  Found ${links.length} potential workflow links`);
 
   const uniqueLinks = [];
@@ -194,4 +196,11 @@ async function crawlAllWorkflows(page, BASE, screenshotsDir) {
   return records;
 }
 
-module.exports = { crawlAllWorkflows, navigateToWorkflows, findWorkflowLinks, walkWorkflow };
+module.exports = {
+  crawlAllWorkflows,
+  findWorkflowLinks,
+  navigateToWorkflows,
+  STEP_SELECTORS,
+  walkWorkflow,
+  WORKFLOW_SELECTORS,
+};

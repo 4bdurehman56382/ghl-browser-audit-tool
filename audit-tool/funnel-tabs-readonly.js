@@ -2,26 +2,18 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
 const { outputPath, requireLocationId } = require("./audit-paths");
+const { CDP_URL } = require("./lib/chrome");
+const { getDefaultContext } = require("./lib/browser-context");
+const { loadFunnels } = require("./lib/config");
+const { isSafeReadOnlyUrl, safeFileName } = require("./lib/safety");
 
 const OUT = outputPath("deep-ghl-audit", "funnel-tabs");
 fs.mkdirSync(OUT, { recursive: true });
 
-function loadFunnels() {
-  const configPath = process.env.GHL_FUNNELS_JSON;
-  if (!configPath) {
-    throw new Error("Set GHL_FUNNELS_JSON to a JSON file containing [{ name, funnelId, stepId }].");
-  }
-  return JSON.parse(fs.readFileSync(path.resolve(configPath), "utf8"));
-}
-
-const funnels = loadFunnels();
-
-const LOCATION_ID = requireLocationId();
-const BASE = `https://app.gohighlevel.com/v2/location/${LOCATION_ID}/funnels-websites/funnels`;
 const routeParts = ["overview", "products", "publishing", "stats", "sales", "security", "events", "settings"];
 
 function safe(value) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return safeFileName(value);
 }
 
 async function body(page) {
@@ -29,8 +21,12 @@ async function body(page) {
 }
 
 async function main() {
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
-  const ctx = browser.contexts()[0];
+  const funnels = loadFunnels(process.env);
+  const locationId = requireLocationId();
+  const base = `https://app.gohighlevel.com/v2/location/${locationId}/funnels-websites/funnels`;
+
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  const ctx = getDefaultContext(browser);
   const page = await ctx.newPage();
   await page.setViewportSize({ width: 1440, height: 1000 });
   const records = [];
@@ -39,13 +35,16 @@ async function main() {
     for (const part of routeParts) {
       let url;
       if (["overview", "products", "publishing"].includes(part)) {
-        url = `${BASE}/${funnel.funnelId}/steps/${funnel.stepId}/${part}`;
+        url = `${base}/${funnel.funnelId}/steps/${funnel.stepId}/${part}`;
       } else {
-        url = `${BASE}/${funnel.funnelId}/${part}`;
+        url = `${base}/${funnel.funnelId}/${part}`;
       }
       const name = `${safe(funnel.name)}-${part}`;
       const rec = { funnel: funnel.name, part, url, ok: false, screenshot: "", body: "" };
       try {
+        if (!isSafeReadOnlyUrl(url, { base })) {
+          throw new Error("Route failed read-only safety validation");
+        }
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
         await page.waitForTimeout(10000);
         rec.body = await body(page);
@@ -63,6 +62,7 @@ async function main() {
   }
 
   await page.close().catch(() => {});
+  browser.disconnect();
   fs.writeFileSync(path.join(OUT, "funnel-tabs.json"), JSON.stringify(records, null, 2));
   fs.writeFileSync(path.join(OUT, "funnel-tabs-summary.md"), records.flatMap((r) => [
     `# ${r.funnel} / ${r.part}`,
@@ -72,10 +72,13 @@ async function main() {
     r.body.slice(0, 2500),
     "",
   ]).join("\n"));
-  process.exit(0);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = { body, main, routeParts, safe };
