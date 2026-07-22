@@ -1,17 +1,51 @@
-const { spawn, execSync } = require("child_process");
+const { spawn } = require("child_process");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { parsePositiveInteger } = require("./config");
 
+const DEFAULT_CDP_HOST = "127.0.0.1";
+const DEFAULT_CDP_PORT = 9222;
+const LOCAL_CDP_HOSTS = new Set([DEFAULT_CDP_HOST, "localhost"]);
 const requestedCdpUrl = (process.env.AUDIT_CDP_URL || "").replace(/\/+$/, "");
+const requestedCdpInfo = requestedCdpUrl ? new URL(requestedCdpUrl) : null;
 const requestedPort = process.env.AUDIT_CDP_PORT;
-const CDP_PORT = requestedCdpUrl
-  ? parsePositiveInteger(new URL(requestedCdpUrl).port || 80, 9222, "AUDIT_CDP_URL port")
-  : parsePositiveInteger(requestedPort, 9222, "AUDIT_CDP_PORT");
-const CDP_URL = requestedCdpUrl || `http://127.0.0.1:${CDP_PORT}`;
+const CDP_PORT = requestedCdpInfo
+  ? parsePositiveInteger(requestedCdpInfo.port || 80, DEFAULT_CDP_PORT, "AUDIT_CDP_URL port")
+  : parsePositiveInteger(requestedPort, DEFAULT_CDP_PORT, "AUDIT_CDP_PORT");
+const CDP_URL = requestedCdpInfo ? requestedCdpInfo.origin : localCdpOrigin(CDP_PORT);
 const ATTACH_EXISTING_CDP = process.env.AUDIT_ATTACH_EXISTING_CDP === "1";
+
+function localCdpOrigin(port) {
+  return new URL(["http://", DEFAULT_CDP_HOST, ":", String(port)].join("")).origin;
+}
+
+function isLocalCdpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" && LOCAL_CDP_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function findInPath(names, envPath = process.env.PATH || "") {
+  const extensions = process.platform === "win32"
+    ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";")
+    : [""];
+
+  for (const dir of envPath.split(path.delimiter)) {
+    if (!dir) continue;
+    for (const name of names) {
+      for (const extension of extensions) {
+        const candidate = path.join(dir, `${name}${extension}`);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  }
+  return null;
+}
 
 function findChrome() {
   if (process.env.CHROME_PATH) {
@@ -48,11 +82,7 @@ function findChrome() {
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
   }
-  try {
-    const which = execSync('which google-chrome 2>/dev/null || which chromium-browser 2>/dev/null || which chromium 2>/dev/null', { encoding: "utf8" }).trim();
-    if (which) return which;
-  } catch {}
-  return null;
+  return findInPath(["google-chrome", "chromium-browser", "chromium"]);
 }
 
 function isCdpAlive() {
@@ -132,11 +162,11 @@ async function launchChrome() {
         "Set AUDIT_ATTACH_EXISTING_CDP=1 if you intentionally want to attach to it."
       );
     }
-    console.log("\x1b[1;32m✓ Chrome DevTools Protocol already running on port 9222\x1b[0m");
+    console.log(`\x1b[1;32m✓ Chrome DevTools Protocol already running on port ${CDP_PORT}\x1b[0m`);
     return { launched: false, port: CDP_PORT, url: CDP_URL };
   }
 
-  if (requestedCdpUrl && !requestedCdpUrl.startsWith("http://127.0.0.1") && !requestedCdpUrl.startsWith("http://localhost")) {
+  if (requestedCdpUrl && !isLocalCdpUrl(requestedCdpUrl)) {
     throw new Error("AUDIT_CDP_URL points to a remote endpoint. Start/connect to that browser yourself with AUDIT_ATTACH_EXISTING_CDP=1.");
   }
 
@@ -174,7 +204,7 @@ async function launchChrome() {
     args.splice(args.length - 1, 0, "--no-sandbox");
   }
 
-  console.log("\x1b[1;36m  Launching Chrome with remote debugging on port 9222...\x1b[0m");
+  console.log(`\x1b[1;36m  Launching Chrome with remote debugging on port ${CDP_PORT}...\x1b[0m`);
 
   const proc = spawn(chromePath, args, {
     detached: true,
@@ -187,12 +217,12 @@ async function launchChrome() {
 
   if (!alive) {
     throw new Error(
-      "Chrome did not start with remote debugging. Check that Chrome is installed and port 9222 is available."
+      `Chrome did not start with remote debugging. Check that Chrome is installed and port ${CDP_PORT} is available.`
     );
   }
 
-  console.log("\x1b[1;32m✓ Chrome launched with remote debugging on port 9222\x1b[0m");
+  console.log(`\x1b[1;32m✓ Chrome launched with remote debugging on port ${CDP_PORT}\x1b[0m`);
   return { launched: true, port: CDP_PORT, url: CDP_URL };
 }
 
-module.exports = { launchChrome, isCdpAlive, printWarning, CDP_URL, CDP_PORT, findChrome };
+module.exports = { launchChrome, isCdpAlive, isLocalCdpUrl, printWarning, CDP_URL, CDP_PORT, findChrome };
