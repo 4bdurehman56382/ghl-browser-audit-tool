@@ -13,14 +13,24 @@ const { injectCursor, hideCursor } = require("./lib/cursor");
 const { optionalLocationId, parsePositiveInteger } = require("./lib/config");
 const { getDefaultContext } = require("./lib/browser-context");
 const { isSafeReadOnlyUrl, normalizeGhlUrl, safeFileName } = require("./lib/safety");
+const {
+  DEFAULT_DEEP_DIVE_LIMIT,
+  buildStoreSmokeRoutes,
+  buildTieredAuditSummary,
+  normalizeProfile,
+  selectDeepDiveCandidates,
+} = require("./lib/tiered-audit");
 
 const LOCATION_ID = optionalLocationId();
 const BASE = LOCATION_ID ? `https://app.gohighlevel.com/v2/location/${LOCATION_ID}` : "";
 const OUT = outputPath();
 const SCREENSHOTS_DIR = path.join(OUT, "screenshots");
 const MAX_PAGES = parsePositiveInteger(process.env.MAX_PAGES, 200, "MAX_PAGES");
+const DEEP_DIVE_LIMIT = parsePositiveInteger(process.env.AUDIT_DEEP_DIVE_LIMIT, DEFAULT_DEEP_DIVE_LIMIT, "AUDIT_DEEP_DIVE_LIMIT");
 const OPEN_TABS_ONLY = process.env.OPEN_TABS_ONLY === "1";
 const ALLOW_ALL_GHL_TABS = process.env.AUDIT_ALLOW_ALL_GHL_TABS === "1";
+const AUDIT_PROFILE = normalizeProfile(process.env.AUDIT_PROFILE || "full");
+const TIERED_AUDIT = process.env.AUDIT_TIERED === "1" || AUDIT_PROFILE === "store";
 
 const GOPAGE_SELECTORS = [
   "a[href*='gohighlevel']",
@@ -51,6 +61,7 @@ function shouldCaptureOpenTab(url) {
 
 function buildSeedRoutes() {
   if (!BASE) return [];
+  if (AUDIT_PROFILE === "store") return buildStoreSmokeRoutes(BASE, normalizeUrl);
   const routes = [
     "/dashboard",
     "/ask-ai",
@@ -209,11 +220,15 @@ async function main() {
 
   const auditStartTime = Date.now();
   const allPages = [];
+  let tieredSmokeRecords = [];
   const workflowRecords = [];
 
   if (BASE && !OPEN_TABS_ONLY) {
     console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m");
-    console.log("\x1b[1;36m  PHASE 1: Deep Page Audit (up to 45 sec wait per page)\x1b[0m");
+    const phaseLabel = TIERED_AUDIT
+      ? "PHASE 1: Store Smoke Audit (signal-first)"
+      : "PHASE 1: Deep Page Audit (up to 45 sec wait per page)";
+    console.log(`\x1b[1;36m  ${phaseLabel}\x1b[0m`);
     console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m\n");
 
     const seeds = buildSeedRoutes();
@@ -234,7 +249,8 @@ async function main() {
       const record = await scanSinglePage(mainPage, url, item.name, SCREENSHOTS_DIR, counter);
       allPages.push(record);
 
-      if (record.ok && item.depth < 1) {
+      const allowDiscovery = !TIERED_AUDIT || item.deepDive === true;
+      if (record.ok && allowDiscovery && item.depth < 1) {
         try {
           const discovered = await discoverInternalLinks(mainPage);
           for (const link of discovered) {
@@ -244,6 +260,31 @@ async function main() {
             }
           }
         } catch {}
+      }
+    }
+
+    if (TIERED_AUDIT) {
+      tieredSmokeRecords = allPages.slice();
+      const candidates = selectDeepDiveCandidates(tieredSmokeRecords, DEEP_DIVE_LIMIT);
+      if (candidates.length > 0 && counter < MAX_PAGES) {
+        console.log("\n\x1b[1;36m" + "=".repeat(68) + "\x1b[0m");
+        console.log("\x1b[1;36m  PHASE 1B: Signal-Based Deep Dive\x1b[0m");
+        console.log("\x1b[1;36m" + "=".repeat(68) + "\x1b[0m\n");
+
+        const deepVisited = new Set();
+        for (const candidate of candidates) {
+          const url = normalizeUrl(candidate.url);
+          if (!shouldVisit(url) || deepVisited.has(url) || counter >= MAX_PAGES) continue;
+          deepVisited.add(url);
+          counter++;
+
+          console.log(`\n\x1b[1;37m  [Deep ${counter}] ${candidate.name}\x1b[0m`);
+          console.log(`  Reason: ${candidate.reasons.join("; ")}`);
+          const record = await scanSinglePage(mainPage, url, `deep dive > ${candidate.name}`, SCREENSHOTS_DIR, counter);
+          allPages.push(record);
+        }
+      } else {
+        console.log("\n\x1b[1;32m  No deep-dive candidates found in smoke pass.\x1b[0m\n");
       }
     }
 
@@ -322,7 +363,10 @@ async function main() {
     totalDurationSeconds: Math.round((Date.now() - auditStartTime) / 1000),
     pages: allPages,
     workflows: workflowRecords,
+    tieredAudit: TIERED_AUDIT ? buildTieredAuditSummary(tieredSmokeRecords, DEEP_DIVE_LIMIT) : null,
     summary: {
+      profile: AUDIT_PROFILE,
+      tiered: TIERED_AUDIT,
       totalPages: allPages.length,
       pagesOk: allPages.filter((p) => p.ok && !p.shutoff).length,
       pagesShutoff: allPages.filter((p) => p.shutoff).length,
@@ -386,7 +430,22 @@ function buildSummaryMd(results) {
     `| Pages Failed | ${s.pagesFailed} |`,
     `| Screenshots Taken | ${s.totalScreenshots} |`,
     `| Workflows Audited | ${s.totalWorkflows} |`,
+    `| Audit Profile | ${s.profile || "full"} |`,
+    `| Tiered Mode | ${s.tiered ? "Yes" : "No"} |`,
     "",
+    ...(results.tieredAudit
+      ? [
+          "## Tiered Audit Signals",
+          "",
+          `**Strategy:** ${results.tieredAudit.strategy}`,
+          `**Smoke Pages:** ${results.tieredAudit.smokePages}`,
+          "",
+          ...(results.tieredAudit.deepDiveCandidates.length > 0
+            ? results.tieredAudit.deepDiveCandidates.map((c) => `- **${c.name}**: ${c.reasons.join("; ")}`)
+            : ["- No deep-dive candidates detected"]),
+          "",
+        ]
+      : []),
     "## Pages OK",
     "",
     ...okPages.map((p) => `- ${p.name} (${p.loadTimeSeconds}s, ${p.headingsCount} headings, ${(p.bodyText || "").length} chars)`),

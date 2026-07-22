@@ -5,6 +5,7 @@
   "main": "audit.js",
   "scripts": {
     "audit": "node audit.js",
+    "audit:store": "AUDIT_PROFILE=store AUDIT_TIERED=1 node audit.js",
     "capture": "node capture-ghl-readonly.js",
     "section-walk": "node section-walk-ghl-readonly.js",
     "deep-crawl": "node deep-ghl-readonly-crawl.js",

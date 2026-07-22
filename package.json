@@ -5,6 +5,7 @@
   "description": "Forkable, AI-importable repository wrapper for the read-only GoHighLevel browser audit tool.",
   "scripts": {
     "audit": "npm --prefix audit-tool run audit",
+    "audit:store": "npm --prefix audit-tool run audit:store",
     "check": "npm --prefix audit-tool run check",
     "test": "npm --prefix audit-tool test"
   },

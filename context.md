@@ -97,6 +97,9 @@ Optional limits:
 
 ```bash
 MAX_PAGES=200  # max pages to crawl (default: 200)
+AUDIT_PROFILE=store  # run the efficient store smoke profile
+AUDIT_TIERED=1  # smoke-first, signal-based deep dive
+AUDIT_DEEP_DIVE_LIMIT=12  # max flagged pages to revisit in tiered mode
 ```
 
 Optional browser/CDP controls:
@@ -135,6 +138,27 @@ GHL_LOCATION_ID=your_location_id node audit.js
 - Takes full-page screenshots
 - Detects admin-shutoff pages and skips them
 - Discovers internal links and enqueues more pages (up to MAX_PAGES)
+
+When `AUDIT_PROFILE=store` is set, Phase 1 becomes an efficient store smoke audit. It checks the highest-signal store surfaces first:
+
+- Stores
+- Products
+- Orders
+- Transactions
+- Domains
+- Analytics
+- URL redirects
+
+With tiered mode enabled (`AUDIT_TIERED=1`, automatically enabled by the store profile), the tool deep-dives only pages with actionable signals:
+
+- failed navigation
+- page timeout or thin visible body content
+- console/runtime errors
+- horizontal overflow
+- images that appear broken
+- required fields without clear labels
+
+This gives a faster first answer for GHL store audits while still preserving evidence and depth where the smoke pass finds risk.
 
 ### Phase 2: Workflow Audit
 - Navigates to Automation → Workflows
@@ -207,6 +231,12 @@ GHL_LOCATION_ID=your_location_id node audit.js
 - Takes full-page screenshots with cursor visible
 - Handles per-page console/error tracking
 - Controls viewport size for consistent captures
+
+### `tiered-audit.js`
+- Defines the efficient store smoke route set
+- Validates audit profile selection
+- Scores page records for deep-dive priority
+- Produces tiered audit metadata for JSON and Markdown output
 
 ### `workflows.js`
 - Navigates to Automation → Workflows section

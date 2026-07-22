@@ -69,6 +69,30 @@ Override output:
 AUDIT_OUTPUT_DIR=tmp/audit-output GHL_LOCATION_ID=your_location_id npm run audit
 ```
 
+## Efficient Store Audit
+
+For GHL store reviews, use the tiered store profile. It checks the highest-signal store surfaces first, then deep-dives only pages with actionable signals such as navigation failures, slow/thin content, console errors, horizontal overflow, broken images, or unlabeled required fields.
+
+```bash
+GHL_LOCATION_ID=your_location_id npm run audit:store
+```
+
+Tune the follow-up depth:
+
+```bash
+AUDIT_DEEP_DIVE_LIMIT=5 GHL_LOCATION_ID=your_location_id npm run audit:store
+```
+
+Main store smoke surfaces:
+
+- Stores
+- Products
+- Orders
+- Transactions
+- Domains
+- Analytics
+- URL redirects
+
 ## Useful Modes
 
 Open-tab-only capture:
