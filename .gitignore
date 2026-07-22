@@ -3,6 +3,8 @@ node_modules/
 .DS_Store
 .env
 *.local
+__pycache__/
+*.pyc
 .audit-tool-chrome-profile/
 client-materials/
 client-materials/audit-output/
