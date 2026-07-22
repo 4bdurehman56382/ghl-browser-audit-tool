@@ -5,6 +5,7 @@ node_modules/
 *.local
 __pycache__/
 *.pyc
+.grill-me-code/
 .audit-tool-chrome-profile/
 client-materials/
 client-materials/audit-output/
